@@ -1,0 +1,249 @@
+{
+  "name": "AWS Health to Jira",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "output": "fields",
+        "fields": [
+          "body",
+          "sender",
+          "subject",
+          "toRecipients"
+        ],
+        "filters": {
+          "custom": "=from/emailAddress/address eq 'health@aws.com'",
+          "readStatus": "unread"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.microsoftOutlookTrigger",
+      "typeVersion": 1,
+      "position": [
+        272,
+        0
+      ],
+      "id": "58872fdc-632c-4c49-a621-4a2d28205909",
+      "name": "Microsoft Outlook Trigger",
+      "alwaysOutputData": false,
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "",
+          "name": "Microsoft Outlook Account Placeholder"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "4086b850-cbce-4a99-b2ed-c61acf246f9f",
+              "leftValue": "={{ $json.count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2128,
+        -16
+      ],
+      "id": "81baaee2-c5b5-4d81-8266-81c146d3ad10",
+      "name": "If",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "function cleanHtml(html) {\n  return html\n    .replace(/<br\\s*\\/?>/gi, \"\\n\")\n    .replace(/<\\/?(p|div|span|font|b|strong|em|td)[^>]*>/gi, \" \")\n    .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, \"\")\n    .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, \"\")\n    .replace(/<[^>]+>/g, \"\")\n    .replace(/&nbsp;/g, \" \")\n    .replace(/&amp;/g, \"&\")\n    .replace(/\\s+/g, \" \")\n    .trim();\n}\n\nconst bodyHtml = $json.body?.content || \"\";\nconst subject = $json.subject || \"\";\nconst body = cleanHtml(bodyHtml);\n\nconst result = {};\n\n// --------------------------------------------------\n// Extract AWS Account ID\n// --------------------------------------------------\nconst accMatch =\n  subject.match(/AWS Account:\\s*(\\d{6,})/i) ||\n  body.match(/Affected account\\s+(\\d{6,})/i);\n\nresult.accountId = accMatch ? accMatch[1] : \"Unknown\";\n\n// --------------------------------------------------\n// Extract GENERALIZED EVENT TITLE (PARENT SUMMARY)\n// --------------------------------------------------\n// Remove account + region noise from subject\nresult.eventTitle = subject\n  .replace(/\\[AWS Account:.*?\\]/gi, \"\")\n  .replace(/\\[[A-Z0-9-]+\\]/gi, \"\")\n  .replace(/^\\[Action Required\\]\\s*/i, \"\")\n  .trim() || \"AWS Health Event\";\n\n// --------------------------------------------------\n// Extract DEADLINE / DATE (if present)\n// --------------------------------------------------\nconst dateMatch = body.match(\n  /(January|February|March|April|May|June|July|August|September|October|November|December)\\s+\\d{1,2},\\s+\\d{4}/i\n);\n\nresult.deadline = dateMatch ? dateMatch[0] : \"Not specified\";\n\n// --------------------------------------------------\n// Extract GENERAL DESCRIPTION (PARENT DESCRIPTION)\n// --------------------------------------------------\nconst generalDescMatch = body.match(\n  /(Our records indicate.*?end of support.*?\\.)/i\n);\n\nresult.parentDescription = generalDescMatch\n  ? generalDescMatch[1].trim()\n  : \"General AWS Health notification regarding this event.\";\n\n// --------------------------------------------------\n// Extract ACCOUNT-SPECIFIC ACTION (SUBTASK DESCRIPTION)\n// --------------------------------------------------\nconst actionMatch = body.match(\n  /(We recommend that you.*?)(If you have any questions|$)/i\n);\n\nresult.subtaskDescription = actionMatch\n  ? actionMatch[1].trim()\n  : \"Review AWS Health Dashboard and take recommended action.\";\n\n// --------------------------------------------------\n// Build UNIQUE EVENT KEY (for parent dedupe)\n// --------------------------------------------------\nresult.eventKey = result.eventTitle.toLowerCase().replace(/\\s+/g, \"-\");\n\n// --------------------------------------------------\n// Build JIRA SUMMARIES (NEW MODEL)\n// --------------------------------------------------\nresult.parentSummary = result.eventTitle;\n\nresult.subtaskSummary =\n  `AWS Account: ${result.accountId}` +\n  (result.deadline !== \"Not specified\"\n    ? ` – ${result.deadline}`\n    : \"\");\n\n// --------------------------------------------------\n// Build JIRA DESCRIPTIONS\n// --------------------------------------------------\nresult.parentJiraDescription = `\n*AWS Health – General Event*\n\n${result.parentDescription}\n\n*Deadline*\n${result.deadline}\n`.trim();\n\nresult.subtaskJiraDescription = `\n*Affected AWS Account*\n${result.accountId}\n\n*Required Action*\n${result.subtaskDescription}\n\n*Deadline*\n${result.deadline}\n`.trim();\n\nreturn result;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        432,
+        0
+      ],
+      "id": "5b945457-c33a-42bc-9ec4-4a62eff4569c",
+      "name": "Extract details from Email"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "returnAll": true,
+        "options": {
+          "jql": "=summary ~ \"{{ $json.parentSummary }}\"\nAND project = YOUR_PROJECT_KEY_PLACEHOLDER\nAND statusCategory != Done\nORDER BY created DESC"
+        }
+      },
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        1808,
+        -16
+      ],
+      "id": "98fc1b5d-2eb8-41ab-ad0d-db86d0e61242",
+      "name": "Look for Parent Task if it Exists Already",
+      "alwaysOutputData": true,
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "",
+          "name": "Jira SW Cloud Account Placeholder"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "project": {
+          "__rl": true,
+          "value": "YOUR_PROJECT_ID_PLACEHOLDER",
+          "mode": "list"
+        },
+        "issueType": {
+          "__rl": true,
+          "value": "YOUR_TASK_ISSUETYPE_ID_PLACEHOLDER",
+          "mode": "list"
+        },
+        "summary": "={{ $('Extract from AI Insight').item.json.parentSummary }}",
+        "additionalFields": {
+          "assignee": {
+            "__rl": true,
+            "value": "YOUR_ASSIGNEE_ID_PLACEHOLDER",
+            "mode": "list"
+          },
+          "description": "={{ $('Extract from AI Insight').item.json.parentDescription }}"
+        }
+      },
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        2320,
+        -192
+      ],
+      "id": "423de846-1722-43f2-863e-ed1012fda2ed",
+      "name": "Create an parent task",
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "",
+          "name": "Jira SW Cloud Account Placeholder"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const count = $items().filter(item => item.json.key).length;\nreturn [{ count }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1968,
+        -16
+      ],
+      "id": "82219d59-5935-4509-9b0e-17335b2c8ba6",
+      "name": "Count Jira Task"
+    },
+    {
+      "parameters": {
+        "project": {
+          "__rl": true,
+          "value": "YOUR_PROJECT_ID_PLACEHOLDER",
+          "mode": "list"
+        },
+        "issueType": {
+          "__rl": true,
+          "value": "YOUR_SUBTASK_ISSUETYPE_ID_PLACEHOLDER",
+          "mode": "list"
+        },
+        "summary": "={{ $('Extract from AI Insight').first().json.subtaskSummary }}",
+        "additionalFields": {
+          "assignee": {
+            "__rl": true,
+            "value": "YOUR_ASSIGNEE_ID_PLACEHOLDER",
+            "mode": "list"
+          },
+          "description": "={{ $('Extract from AI Insight').first().json.subtaskDescription }}",
+          "parentIssueKey": "={{ $('Count Jira Task 2').first().json.parentKey }}"
+        }
+      },
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        3392,
+        48
+      ],
+      "id": "01821c82-9ac3-4cd0-9842-a92ec232c066",
+      "name": "Create subtask",
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "",
+          "name": "Jira SW Cloud Account Placeholder"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [\n  {\n    json: {\n      model: \"YOUR_MODEL_STRING_PLACEHOLDER\",\n      max_tokens: 512,\n      temperature: 0,\n      messages: [\n        {\n          role: \"system\",\n          content:\n            `You are an expert at analyzing AWS Health notification emails and filtering for actionable items only.\n\nIMPORTANT: Only process notifications that require immediate action or are time-sensitive. Skip purely informational notifications like routine maintenance with automatic handling.\n\nFirst, classify the notification as one of:\n- ACTIONABLE: Requires manual intervention, has tight deadline, impacts service availability, or poses security/compliance risk\n- INFORMATIONAL: Routine maintenance, automatic handling, no action needed, long planning window (2+ weeks)\n\nIf INFORMATIONAL, return:\n{\n  \"classification\": \"INFORMATIONAL\",\n  \"reason\": \"Brief explanation why no action is needed\"\n}\n\nIf ACTIONABLE, return:\n{\n  \"classification\": \"ACTIONABLE\",\n  \"parentSummary\": \"Generalized parent task title (remove account IDs, date, regions, action prefixes. Keep it concise, 3-8 words, title case)\",\n  \"parentDescription\": \"Brief description of the general AWS event (2-3 sentences). Explain what action is required and why it is critical\",\n  \"accountId\": \"The AWS account ID from the email\",\n  \"deadline\": \"Any deadline mentioned (or 'Not specified')\",\n  \"subtaskSummary\": \"AWS Account: [ID] — [deadline if exists]\",\n  \"subtaskDescription\": \"Specific action required for this account (2-3 sentences)\",\n  \"priority\": \"Critical/High/Medium/Low based on urgency and deadline\"\n}\n\nGuidelines:\n- For parentSummary: Remove [AWS Account: X], [REGION], [Action Required], Date, Words like \"Your\" etc. Keep the core event.\n- For parentDescription: Explain what this AWS event is about generally. Add why action is needed and what services are affected. Make it 1-3 sentences. Less than 255 characters.\n- For subtaskDescription: Focus on the specific action needed for this account. Make it 1-3 sentences. Less than 255 characters.\n- Extract dates in format \"Month DD, YYYY\" if present\n- Assess priority based on deadline proximity and language like \"urgent\", \"critical\", \"required\"\n- Classify as INFORMATIONAL if: routine updates with automatic handling, secondary region only impact, long maintenance windows (2+ weeks), or no manual intervention needed\n- Classify as ACTIONABLE if: immediate deadline (<1 week), requires configuration change, impacts primary region, security/compliance issue, or manual intervention required\n\nReturn ONLY valid JSON, no markdown formatting or extra text.`\n        },\n        {\n          role: \"user\",\n          content: `Email Subject: ${$('Microsoft Outlook Trigger').first().json.subject}\n          Email Body: ${$('Microsoft Outlook Trigger').first().json.body.content}`\n        }\n      ]\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        608,
+        0
+      ],
+      "id": "6a5a0e24-94e8-4640-b386-f4d271ff876b",
+      "name": "Prompt for AI"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://YOUR_LLM_GATEWAY_URL/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_LLM_API_KEY_PLACEHOLDER"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        752,
+        0
+      ],
+      "id": "517dee48-b3d3-447a-b336-d027d28ad923",
+      "name": "AI (via LLM)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// --------------------------------------------------\n// Extract JSON from nested API response\n// --------------------------------------------------\n\nlet rawResponse = $input.first().json.choices[0].message.content;\n\n// Remove markdown code fences if present\nrawResponse = rawResponse.replace(/
